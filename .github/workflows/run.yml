@@ -1,7 +1,15 @@
-name: DM Minah Test
+name: DM Minah
 
 on:
+  schedule:
+    - cron: "*/5 * * * *"
   workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dm-minah
 
 jobs:
   run:
@@ -16,3 +24,9 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TWELVE_DATA_KEY: ${{ secrets.TWELVE_DATA_KEY }}
+      - name: Save signal log
+        run: |
+          git config user.name "dm-minah"
+          git config user.email "bot@users.noreply.github.com"
+          git add signals.json
+          git diff --cached --quiet || (git commit -m "update signals" && git push)
