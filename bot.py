@@ -6,6 +6,7 @@ CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 KEY = os.environ["TWELVE_DATA_KEY"]
 LOG = "signals.json"
 MINS = {"5min": 5, "15min": 15, "1h": 60, "4h": 240}
+MIN_RISK = {"SCALP": 2.0, "SWING": 8.0}
 PROFILES = {
     "SCALP": {"entry": "5min", "trend": "15min", "rr": [1.5, 2, 3], "max_age": 12, "cooldown": 30},
     "SWING": {"entry": "1h", "trend": "4h", "rr": [2, 3, 5], "max_age": 25, "cooldown": 360},
@@ -66,7 +67,7 @@ def trend(c):
 
 def build(name, p, side, kind, strategy, entry, sl, a, score, bias):
     risk = abs(entry - sl)
-    if risk < 0.3 * a or risk > 3 * a:
+    if risk < max(0.5 * a, MIN_RISK[name]) or risk > 3 * a:
         return None
     sg = 1 if side == "BUY" else -1
     return {"profile": name, "tf": p["entry"], "trend_tf": p["trend"], "side": side,
@@ -90,65 +91,4 @@ def analyse(name, p, ec, tc):
         sl = min(x["l"] for x in ec[-8:]) - 0.2 * a
         f.append(build(name, p, "BUY", "Continuation", "Price Action + EMA trend pullback",
                        last["c"], sl, a, 3 + struct + strong, bias))
-    if bias == "DOWN" and e20 < e50 and last["h"] >= e20 - 0.1 * a and last["c"] < e20 and bear:
-        sl = max(x["h"] for x in ec[-8:]) + 0.2 * a
-        f.append(build(name, p, "SELL", "Continuation", "Price Action + EMA trend pullback",
-                       last["c"], sl, a, 3 + struct + strong, bias))
-    if hi and last["h"] > hi[-1] and last["c"] < hi[-1] and bear and strong:
-        score = 3 + (bias != "UP") + (e20 < e50)
-        if score >= 4:
-            f.append(build(name, p, "SELL", "Reversal", "Liquidity sweep above swing high",
-                           last["c"], last["h"] + 0.2 * a, a, score, bias))
-    if lo and last["l"] < lo[-1] and last["c"] > lo[-1] and bull and strong:
-        score = 3 + (bias != "DOWN") + (e20 > e50)
-        if score >= 4:
-            f.append(build(name, p, "BUY", "Reversal", "Liquidity sweep below swing low",
-                           last["c"], last["l"] - 0.2 * a, a, score, bias))
-    return [x for x in f if x]
-
-
-def fmt(s):
-    icon = "🟢" if s["side"] == "BUY" else "🔴"
-    tps = "\n".join(f"TP{i+1}: {t:.2f} (1:{r})"
-                    for i, (t, r) in enumerate(zip(s["tps"], s["rr"])))
-    return (f"{icon} {s['side']} XAUUSD | {s['profile']} ({s['tf']})\n"
-            f"Type: {s['kind']}\nStrategy: {s['strategy']}\n"
-            f"Entry: {s['entry']:.2f}\nSL: {s['sl']:.2f}\n{tps}\n"
-            f"Trend bias ({s['trend_tf']}): {s['bias']}\n"
-            f"Rule score: {s['score']}/5\n"
-            f"Analysis only, not financial advice.")
-
-
-def send(text):
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    body = urllib.parse.urlencode({"chat_id": CHAT_ID, "text": text}).encode()
-    urllib.request.urlopen(url, data=body, timeout=20)
-
-
-def main():
-    now = datetime.now(timezone.utc)
-    log = json.load(open(LOG)) if os.path.exists(LOG) else []
-    for name, p in PROFILES.items():
-        if name == "SWING" and now.minute >= 10:
-            continue
-        ec, tc = fetch(p["entry"]), fetch(p["trend"])
-        closed = ec[-1]["t"] + timedelta(minutes=MINS[p["entry"]])
-        if (now - closed).total_seconds() / 60 > p["max_age"]:
-            print(name, "market closed or data stale")
-            continue
-        found = analyse(name, p, ec, tc)
-        print(name, "setups found:", len(found))
-        for s in found:
-            recent = [x for x in log if x["profile"] == name and x["side"] == s["side"]
-                      and (now - datetime.fromisoformat(x["time"])).total_seconds() / 60 < p["cooldown"]]
-            if recent:
-                continue
-            send(fmt(s))
-            s["time"] = now.isoformat()
-            s["status"] = "open"
-            log.append(s)
-    json.dump(log, open(LOG, "w"), indent=1)
-
-
-if __name__ == "__main__":
-    main()
+    if bias == "DOWN" and e20 < e50 and last["h"] >= e20 - 0.1 * a and last["c"] 
