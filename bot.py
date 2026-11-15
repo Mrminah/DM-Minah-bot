@@ -91,4 +91,106 @@ def analyse(name, p, ec, tc):
         sl = min(x["l"] for x in ec[-8:]) - 0.2 * a
         f.append(build(name, p, "BUY", "Continuation", "Price Action + EMA trend pullback",
                        last["c"], sl, a, 3 + struct + strong, bias))
-    if bias == "DOWN" and e20 < e50 and last["h"] >= e20 - 0.1 * a and last["c"] 
+    if bias == "DOWN" and e20 < e50 and last["h"] >= e20 - 0.1 * a and last["c"] < e20 and bear:
+        sl = max(x["h"] for x in ec[-8:]) + 0.2 * a
+        f.append(build(name, p, "SELL", "Continuation", "Price Action + EMA trend pullback",
+                       last["c"], sl, a, 3 + struct + strong, bias))
+    if hi and last["h"] > hi[-1] and last["c"] < hi[-1] and bear and strong:
+        score = 3 + (bias != "UP") + (e20 < e50)
+        if score >= 4:
+            f.append(build(name, p, "SELL", "Reversal", "Liquidity sweep above swing high",
+                           last["c"], last["h"] + 0.2 * a, a, score, bias))
+    if lo and last["l"] < lo[-1] and last["c"] > lo[-1] and bull and strong:
+        score = 3 + (bias != "DOWN") + (e20 > e50)
+        if score >= 4:
+            f.append(build(name, p, "BUY", "Reversal", "Liquidity sweep below swing low",
+                           last["c"], last["l"] - 0.2 * a, a, score, bias))
+    return [x for x in f if x]
+
+
+def fmt(s):
+    icon = "🟢" if s["side"] == "BUY" else "🔴"
+    tps = "\n".join(f"TP{i+1}: {t:.2f} (1:{r})"
+                    for i, (t, r) in enumerate(zip(s["tps"], s["rr"])))
+    return (f"{icon} {s['side']} XAUUSD | {s['profile']} ({s['tf']})\n"
+            f"Type: {s['kind']}\nStrategy: {s['strategy']}\n"
+            f"Entry: {s['entry']:.2f}\nSL: {s['sl']:.2f}\n{tps}\n"
+            f"Trend bias ({s['trend_tf']}): {s['bias']}\n"
+            f"Rule score: {s['score']}/5\n"
+            f"Analysis only, not financial advice.")
+
+
+def send(text):
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    body = urllib.parse.urlencode({"chat_id": CHAT_ID, "text": text}).encode()
+    urllib.request.urlopen(url, data=body, timeout=20)
+
+
+def floor5(dt):
+    return dt.replace(minute=dt.minute - dt.minute % 5, second=0, microsecond=0)
+
+
+def track(log, c5, now):
+    for s in log:
+        if s.get("status") != "open":
+            continue
+        t0 = datetime.fromisoformat(s["time"])
+        start = floor5(t0)
+        hits = s.get("hits", 0)
+        buy = s["side"] == "BUY"
+        label = f"{s['side']} XAUUSD | {s['profile']}"
+        for x in c5:
+            if x["t"] < start:
+                continue
+            sl_hit = x["l"] <= s["sl"] if buy else x["h"] >= s["sl"]
+            if sl_hit:  # SL checked first = conservative
+                s["status"] = "closed"
+                s["result"] = "SL" if hits == 0 else f"TP{hits} then SL"
+                send(f"❌ {label}\nStopped out at SL {s['sl']:.2f}\n"
+                     f"Entry was {s['entry']:.2f}. Result: {s['result']}")
+                break
+            while hits < 3 and ((x["h"] >= s["tps"][hits]) if buy else (x["l"] <= s["tps"][hits])):
+                hits += 1
+                send(f"✅ {label}\nTP{hits} hit at {s['tps'][hits-1]:.2f}\n"
+                     f"Entry was {s['entry']:.2f}")
+            if hits == 3:
+                s["status"] = "closed"
+                s["result"] = "TP3"
+                break
+        s["hits"] = hits
+        if s["status"] == "open" and (now - t0).total_seconds() > 24 * 3600:
+            s["status"] = "closed"
+            s["result"] = "expired" if hits == 0 else f"TP{hits} then expired"
+
+
+def main():
+    now = datetime.now(timezone.utc)
+    log = json.load(open(LOG)) if os.path.exists(LOG) else []
+    c5 = fetch("5min", 288)
+    track(log, c5, now)
+    for name, p in PROFILES.items():
+        if name == "SWING" and now.minute >= 10:
+            continue
+        ec = c5[-120:] if p["entry"] == "5min" else fetch(p["entry"])
+        tc = fetch(p["trend"])
+        closed = ec[-1]["t"] + timedelta(minutes=MINS[p["entry"]])
+        if (now - closed).total_seconds() / 60 > p["max_age"]:
+            print(name, "market closed or data stale")
+            continue
+        found = analyse(name, p, ec, tc)
+        print(name, "setups found:", len(found))
+        for s in found:
+            recent = [x for x in log if x["profile"] == name and x["side"] == s["side"]
+                      and (now - datetime.fromisoformat(x["time"])).total_seconds() / 60 < p["cooldown"]]
+            if recent:
+                continue
+            send(fmt(s))
+            s["time"] = now.isoformat()
+            s["status"] = "open"
+            s["hits"] = 0
+            log.append(s)
+    json.dump(log, open(LOG, "w"), indent=1)
+
+
+if __name__ == "__main__":
+    main()
