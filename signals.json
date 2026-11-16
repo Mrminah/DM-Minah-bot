@@ -1,1 +1,27 @@
-[]
+[
+ {
+  "profile": "SCALP",
+  "tf": "5min",
+  "trend_tf": "15min",
+  "side": "BUY",
+  "kind": "Reversal",
+  "strategy": "Liquidity sweep below swing low",
+  "entry": 3877.33273,
+  "sl": 3863.902900285714,
+  "rr": [
+   1.5,
+   2,
+   3
+  ],
+  "tps": [
+   3897.477474571429,
+   3904.192389428572,
+   3917.622219142858
+  ],
+  "score": 4,
+  "bias": "RANGE",
+  "time": "2026-11-16T02:07:55.041877+00:00",
+  "status": "open",
+  "hits": 0
+ }
+]
