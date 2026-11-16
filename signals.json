@@ -21,7 +21,8 @@
   "score": 4,
   "bias": "RANGE",
   "time": "2026-11-16T02:07:55.041877+00:00",
-  "status": "open",
-  "hits": 0
+  "status": "closed",
+  "hits": 0,
+  "result": "SL"
  }
 ]
