@@ -7,6 +7,11 @@ KEY = os.environ["TWELVE_DATA_KEY"]
 LOG = "signals.json"
 MINS = {"5min": 5, "15min": 15, "1h": 60, "4h": 240}
 MIN_RISK = {"SCALP": 2.0, "SWING": 8.0}
+MAX_RISK = {"SCALP": 12.0, "SWING": 25.0}  # stop cap in price points
+MIN_ER = 0.15    # below this the market is choppy
+MIN_GAP = 0.4    # min EMA20/EMA50 separation (in ATR) for pullbacks
+SESSION = (7, 20)  # London + New York, UTC hours
+MODE = "new"     # "new" = all day, "new_session" = London/NY only, "old" = old rules
 PIP = 0.10  # 1 pip = 0.10 on gold (10 pips = $1 move)
 PROFILES = {
     "SCALP": {"entry": "5min", "trend": "15min", "rr": [1.5, 3, 5], "max_age": 12, "cooldown": 30},
@@ -43,6 +48,13 @@ def atr(c, n=14):
     return sum(trs[-n:]) / n
 
 
+def eff(c, n=20):
+    """Efficiency ratio: 1 = straight trend, near 0 = choppy."""
+    seg = [x["c"] for x in c[-(n + 1):]]
+    path = sum(abs(b - a) for a, b in zip(seg, seg[1:]))
+    return abs(seg[-1] - seg[0]) / path if path else 0
+
+
 def swings(c, k=2):
     hi, lo = [], []
     for i in range(k, len(c) - k):
@@ -66,46 +78,76 @@ def trend(c):
     return "RANGE", False
 
 
-def build(name, p, side, kind, strategy, entry, sl, a, score, bias):
+def build(name, p, side, kind, strategy, entry, sl, a, score, bias, strict, ctime):
     risk = abs(entry - sl)
     if risk < max(0.5 * a, MIN_RISK[name]) or risk > 3 * a:
         return None
+    if strict and risk > MAX_RISK[name]:
+        return None
     sg = 1 if side == "BUY" else -1
+    z1, z2 = entry - sg * 0.1 * risk, entry + sg * 0.25 * risk
     return {"profile": name, "tf": p["entry"], "trend_tf": p["trend"], "side": side,
             "kind": kind, "strategy": strategy, "entry": entry, "sl": sl,
             "rr": p["rr"], "tps": [entry + sg * risk * r for r in p["rr"]],
-            "score": int(score), "bias": bias}
+            "score": int(score), "bias": bias,
+            "zlo": min(z1, z2), "zhi": max(z1, z2), "ctime": ctime}
 
 
-def analyse(name, p, ec, tc):
+def analyse(name, p, ec, tc, mode="new"):
+    strict = mode != "old"
+    last = ec[-1]
+    if mode == "new_session" and not (SESSION[0] <= last["t"].hour < SESSION[1]):
+        return []
+    ctime = (last["t"] + timedelta(minutes=MINS[p["entry"]])).strftime("%H:%M")
     bias, struct = trend(tc)
     cl = [x["c"] for x in ec]
     e20, e50 = ema(cl, 20)[-1], ema(cl, 50)[-1]
     a = atr(ec)
-    last = ec[-1]
     rng = last["h"] - last["l"]
     strong = rng > 0 and abs(last["c"] - last["o"]) > 0.5 * rng
     bull, bear = last["c"] > last["o"], last["c"] < last["o"]
     hi, lo = swings(ec)
+    er = eff(ec)
+    gap = abs(e20 - e50) / a
     f = []
+    # --- trend pullbacks ---
     if bias == "UP" and e20 > e50 and last["l"] <= e20 + 0.1 * a and last["c"] > e20 and bull:
-        sl = min(x["l"] for x in ec[-8:]) - 0.2 * a
-        f.append(build(name, p, "BUY", "Continuation", "Price Action + EMA trend pullback",
-                       last["c"], sl, a, 3 + struct + strong, bias))
+        score = 3 + struct + strong
+        if not strict or (score >= 4 and er >= MIN_ER and gap >= MIN_GAP):
+            sl = min(x["l"] for x in ec[-8:]) - 0.2 * a
+            f.append(build(name, p, "BUY", "Continuation", "Price Action + EMA trend pullback",
+                           last["c"], sl, a, score, bias, strict, ctime))
     if bias == "DOWN" and e20 < e50 and last["h"] >= e20 - 0.1 * a and last["c"] < e20 and bear:
-        sl = max(x["h"] for x in ec[-8:]) + 0.2 * a
-        f.append(build(name, p, "SELL", "Continuation", "Price Action + EMA trend pullback",
-                       last["c"], sl, a, 3 + struct + strong, bias))
-    if hi and last["h"] > hi[-1] and last["c"] < hi[-1] and bear and strong:
-        score = 3 + (bias != "UP") + (e20 < e50)
-        if score >= 4:
+        score = 3 + struct + strong
+        if not strict or (score >= 4 and er >= MIN_ER and gap >= MIN_GAP):
+            sl = max(x["h"] for x in ec[-8:]) + 0.2 * a
+            f.append(build(name, p, "SELL", "Continuation", "Price Action + EMA trend pullback",
+                           last["c"], sl, a, score, bias, strict, ctime))
+    # --- liquidity sweep reversals ---
+    if hi and last["h"] > hi[-1] and last["c"] < hi[-1] and bear:
+        if strict:
+            wick = last["h"] - max(last["o"], last["c"])
+            deep = last["h"] - hi[-1] >= 0.15 * a
+            score = 2 + (bias == "DOWN") + (e20 < e50) + (bias == "DOWN" and struct)
+            ok = deep and wick >= 0.4 * rng and er >= MIN_ER and score >= 4
+        else:
+            score = 3 + (bias != "UP") + (e20 < e50)
+            ok = strong and score >= 4
+        if ok:
             f.append(build(name, p, "SELL", "Reversal", "Liquidity sweep above swing high",
-                           last["c"], last["h"] + 0.2 * a, a, score, bias))
-    if lo and last["l"] < lo[-1] and last["c"] > lo[-1] and bull and strong:
-        score = 3 + (bias != "DOWN") + (e20 > e50)
-        if score >= 4:
+                           last["c"], last["h"] + 0.2 * a, a, score, bias, strict, ctime))
+    if lo and last["l"] < lo[-1] and last["c"] > lo[-1] and bull:
+        if strict:
+            wick = min(last["o"], last["c"]) - last["l"]
+            deep = lo[-1] - last["l"] >= 0.15 * a
+            score = 2 + (bias == "UP") + (e20 > e50) + (bias == "UP" and struct)
+            ok = deep and wick >= 0.4 * rng and er >= MIN_ER and score >= 4
+        else:
+            score = 3 + (bias != "DOWN") + (e20 > e50)
+            ok = strong and score >= 4
+        if ok:
             f.append(build(name, p, "BUY", "Reversal", "Liquidity sweep below swing low",
-                           last["c"], last["l"] - 0.2 * a, a, score, bias))
+                           last["c"], last["l"] - 0.2 * a, a, score, bias, strict, ctime))
     return [x for x in f if x]
 
 
@@ -121,13 +163,18 @@ def fmt(s):
         extra = f" (+{pips(t, prev):.0f} from TP{i})" if i else ""
         lines.append(f"TP{i+1}: {t:.2f} | {pips(t, s['entry']):.0f} pips | 1:{r}{extra}")
         prev = t
+    word = "above" if s["side"] == "BUY" else "below"
+    skip = s["zhi"] if s["side"] == "BUY" else s["zlo"]
     return (f"{icon} {s['side']} XAUUSD | {s['profile']} ({s['tf']})\n"
             f"Type: {s['kind']}\nStrategy: {s['strategy']}\n"
             f"Entry: {s['entry']:.2f}\n"
+            f"Entry zone: {s['zlo']:.2f} to {s['zhi']:.2f}\n"
+            f"Signal candle closed: {s['ctime']} UTC\n"
             f"SL: {s['sl']:.2f} | {pips(s['sl'], s['entry']):.0f} pips\n"
             + "\n".join(lines) +
             f"\nTrend bias ({s['trend_tf']}): {s['bias']}\n"
             f"Rule score: {s['score']}/5\n\n"
+            f"Late? Skip this trade if price is already {word} {skip:.2f}.\n\n"
             f"Trade plan:\n"
             f"- TP1 hit: move SL to entry\n"
             f"- TP2 hit: move SL to TP1\n"
@@ -235,7 +282,7 @@ def main():
         if (now - closed).total_seconds() / 60 > p["max_age"]:
             print(name, "market closed or data stale")
             continue
-        found = analyse(name, p, ec, tc)
+        found = analyse(name, p, ec, tc, MODE)
         print(name, "setups found:", len(found))
         shift_check(log, name, trend(tc)[0], found)
         for s in found:
