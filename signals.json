@@ -49,5 +49,30 @@
   "time": "2026-11-16T16:02:35.965270+00:00",
   "status": "open",
   "hits": 0
+ },
+ {
+  "profile": "SCALP",
+  "tf": "5min",
+  "trend_tf": "15min",
+  "side": "SELL",
+  "kind": "Reversal",
+  "strategy": "Liquidity sweep above swing high",
+  "entry": 3869.43676,
+  "sl": 3874.7553049999997,
+  "rr": [
+   1.5,
+   2,
+   3
+  ],
+  "tps": [
+   3861.4589425000004,
+   3858.799670000001,
+   3853.481125000001
+  ],
+  "score": 4,
+  "bias": "UP",
+  "time": "2026-11-17T09:03:39.062817+00:00",
+  "status": "open",
+  "hits": 0
  }
 ]
