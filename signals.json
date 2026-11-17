@@ -47,10 +47,11 @@
   "score": 4,
   "bias": "DOWN",
   "time": "2026-11-16T16:02:35.965270+00:00",
-  "status": "open",
+  "status": "closed",
   "hits": 0,
   "sl_now": 3891.3006262857143,
-  "checked": "2026-11-17T15:20:00+00:00"
+  "checked": "2026-11-17T16:25:00+00:00",
+  "result": "SL"
  },
  {
   "profile": "SCALP",
