@@ -7,9 +7,10 @@ KEY = os.environ["TWELVE_DATA_KEY"]
 LOG = "signals.json"
 MINS = {"5min": 5, "15min": 15, "1h": 60, "4h": 240}
 MIN_RISK = {"SCALP": 2.0, "SWING": 8.0}
+PIP = 0.10  # 1 pip = 0.10 on gold (10 pips = $1 move)
 PROFILES = {
-    "SCALP": {"entry": "5min", "trend": "15min", "rr": [1.5, 2, 3], "max_age": 12, "cooldown": 30},
-    "SWING": {"entry": "1h", "trend": "4h", "rr": [2, 3, 5], "max_age": 25, "cooldown": 360},
+    "SCALP": {"entry": "5min", "trend": "15min", "rr": [1.5, 3, 5], "max_age": 12, "cooldown": 30},
+    "SWING": {"entry": "1h", "trend": "4h", "rr": [2, 4, 6], "max_age": 25, "cooldown": 360},
 }
 
 
@@ -108,15 +109,30 @@ def analyse(name, p, ec, tc):
     return [x for x in f if x]
 
 
+def pips(a, b):
+    return abs(a - b) / PIP
+
+
 def fmt(s):
     icon = "🟢" if s["side"] == "BUY" else "🔴"
-    tps = "\n".join(f"TP{i+1}: {t:.2f} (1:{r})"
-                    for i, (t, r) in enumerate(zip(s["tps"], s["rr"])))
+    lines = []
+    prev = s["entry"]
+    for i, (t, r) in enumerate(zip(s["tps"], s["rr"])):
+        extra = f" (+{pips(t, prev):.0f} from TP{i})" if i else ""
+        lines.append(f"TP{i+1}: {t:.2f} | {pips(t, s['entry']):.0f} pips | 1:{r}{extra}")
+        prev = t
     return (f"{icon} {s['side']} XAUUSD | {s['profile']} ({s['tf']})\n"
             f"Type: {s['kind']}\nStrategy: {s['strategy']}\n"
-            f"Entry: {s['entry']:.2f}\nSL: {s['sl']:.2f}\n{tps}\n"
-            f"Trend bias ({s['trend_tf']}): {s['bias']}\n"
-            f"Rule score: {s['score']}/5\n"
+            f"Entry: {s['entry']:.2f}\n"
+            f"SL: {s['sl']:.2f} | {pips(s['sl'], s['entry']):.0f} pips\n"
+            + "\n".join(lines) +
+            f"\nTrend bias ({s['trend_tf']}): {s['bias']}\n"
+            f"Rule score: {s['score']}/5\n\n"
+            f"Trade plan:\n"
+            f"- TP1 hit: move SL to entry\n"
+            f"- TP2 hit: move SL to TP1\n"
+            f"- TP3 hit: close the trade\n"
+            f"I will message you at each step and warn you if the market shifts.\n"
             f"Analysis only, not financial advice.")
 
 
@@ -136,31 +152,73 @@ def track(log, c5, now):
             continue
         t0 = datetime.fromisoformat(s["time"])
         start = floor5(t0)
+        checked = datetime.fromisoformat(s["checked"]) if s.get("checked") else None
         hits = s.get("hits", 0)
+        cur = s.get("sl_now", s["sl"])
         buy = s["side"] == "BUY"
         label = f"{s['side']} XAUUSD | {s['profile']}"
         for x in c5:
-            if x["t"] < start:
+            if x["t"] < start or (checked and x["t"] <= checked):
                 continue
-            sl_hit = x["l"] <= s["sl"] if buy else x["h"] >= s["sl"]
+            sl_hit = x["l"] <= cur if buy else x["h"] >= cur
             if sl_hit:  # SL checked first = conservative
                 s["status"] = "closed"
-                s["result"] = "SL" if hits == 0 else f"TP{hits} then SL"
-                send(f"❌ {label}\nStopped out at SL {s['sl']:.2f}\n"
-                     f"Entry was {s['entry']:.2f}. Result: {s['result']}")
+                if hits == 0:
+                    s["result"] = "SL"
+                    send(f"❌ {label}\nStopped out at SL {cur:.2f}\nEntry was {s['entry']:.2f}.")
+                elif hits == 1:
+                    s["result"] = "TP1 then BE"
+                    send(f"🟡 {label}\nPrice returned to entry {cur:.2f}. "
+                         f"Closed at breakeven after TP1. No loss.")
+                else:
+                    s["result"] = f"TP{hits} then SL"
+                    send(f"🟡 {label}\nTrailing stop hit at {cur:.2f} after TP{hits}. "
+                         f"Profit secured from TP{hits-1}.")
                 break
             while hits < 3 and ((x["h"] >= s["tps"][hits]) if buy else (x["l"] <= s["tps"][hits])):
                 hits += 1
-                send(f"✅ {label}\nTP{hits} hit at {s['tps'][hits-1]:.2f}\n"
-                     f"Entry was {s['entry']:.2f}")
+                tp = s["tps"][hits - 1]
+                p_ = f"{pips(tp, s['entry']):.0f} pips"
+                if hits == 1:
+                    cur = s["entry"]
+                    send(f"✅ {label}\nTP1 hit at {tp:.2f} (+{p_})\n"
+                         f"ACTION: move SL to entry {cur:.2f}. Trade is now risk-free.")
+                elif hits == 2:
+                    cur = s["tps"][0]
+                    send(f"✅✅ {label}\nTP2 hit at {tp:.2f} (+{p_})\n"
+                         f"ACTION: move SL to TP1 {cur:.2f}.")
+                else:
+                    send(f"🏆 {label}\nTP3 hit at {tp:.2f} (+{p_})\n"
+                         f"ACTION: close the trade. Full target reached.")
             if hits == 3:
                 s["status"] = "closed"
                 s["result"] = "TP3"
                 break
         s["hits"] = hits
+        s["sl_now"] = cur
+        s["checked"] = c5[-1]["t"].isoformat()
         if s["status"] == "open" and (now - t0).total_seconds() > 24 * 3600:
             s["status"] = "closed"
             s["result"] = "expired" if hits == 0 else f"TP{hits} then expired"
+            send(f"⏱ {label}\nSignal expired after 24h. Consider closing manually "
+                 f"if still open.")
+
+
+def shift_check(log, name, bias_now, found):
+    for s in log:
+        if s.get("status") != "open" or s["profile"] != name or s.get("warned"):
+            continue
+        opposite = any(f["side"] != s["side"] for f in found)
+        against = (s["side"] == "BUY" and bias_now == "DOWN") or \
+                  (s["side"] == "SELL" and bias_now == "UP")
+        flipped = against and bias_now != s["bias"]
+        if opposite or flipped:
+            why = "an opposite setup has formed" if opposite else f"trend bias flipped to {bias_now}"
+            send(f"⚠️ MARKET SHIFT | {s['side']} XAUUSD {s['profile']}\n"
+                 f"Entry {s['entry']:.2f}. Reason: {why}.\n"
+                 f"What to do: if in profit, secure it (close part or all or tighten SL). "
+                 f"If still near entry, consider closing early. The market may be reversing.")
+            s["warned"] = True
 
 
 def main():
@@ -179,6 +237,7 @@ def main():
             continue
         found = analyse(name, p, ec, tc)
         print(name, "setups found:", len(found))
+        shift_check(log, name, trend(tc)[0], found)
         for s in found:
             recent = [x for x in log if x["profile"] == name and x["side"] == s["side"]
                       and (now - datetime.fromisoformat(x["time"])).total_seconds() / 60 < p["cooldown"]]
@@ -188,6 +247,7 @@ def main():
             s["time"] = now.isoformat()
             s["status"] = "open"
             s["hits"] = 0
+            s["sl_now"] = s["sl"]
             log.append(s)
     json.dump(log, open(LOG, "w"), indent=1)
 
