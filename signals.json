@@ -78,5 +78,34 @@
   "status": "closed",
   "hits": 3,
   "result": "TP3"
+ },
+ {
+  "profile": "SCALP",
+  "tf": "5min",
+  "trend_tf": "15min",
+  "side": "SELL",
+  "kind": "Continuation",
+  "strategy": "Price Action + EMA trend pullback",
+  "entry": 3741.53635,
+  "sl": 3751.7768822857142,
+  "rr": [
+   1.5,
+   3,
+   5
+  ],
+  "tps": [
+   3726.1755515714285,
+   3710.8147531428567,
+   3690.333688571428
+  ],
+  "score": 4,
+  "bias": "DOWN",
+  "zlo": 3738.9762169285714,
+  "zhi": 3742.5604032285714,
+  "ctime": "17:40",
+  "time": "2026-11-18T17:42:55.080874+00:00",
+  "status": "open",
+  "hits": 0,
+  "sl_now": 3751.7768822857142
  }
 ]
