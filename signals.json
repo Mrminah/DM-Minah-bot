@@ -109,5 +109,34 @@
   "sl_now": 3741.53635,
   "checked": "2026-11-19T00:10:00+00:00",
   "result": "TP1 then BE"
+ },
+ {
+  "profile": "SCALP",
+  "tf": "5min",
+  "trend_tf": "15min",
+  "side": "SELL",
+  "kind": "Continuation",
+  "strategy": "Price Action + EMA trend pullback",
+  "entry": 3722.50688,
+  "sl": 3728.0365655714286,
+  "rr": [
+   1.5,
+   3,
+   5
+  ],
+  "tps": [
+   3714.212351642857,
+   3705.917823285714,
+   3694.8584521428565
+  ],
+  "score": 5,
+  "bias": "DOWN",
+  "zlo": 3721.1244586071425,
+  "zhi": 3723.0598485571427,
+  "ctime": "04:40",
+  "time": "2026-11-19T04:43:18.180416+00:00",
+  "status": "open",
+  "hits": 0,
+  "sl_now": 3728.0365655714286
  }
 ]
